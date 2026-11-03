@@ -58,6 +58,9 @@ class SubmissionOut(BaseModel):
     id: str
     status: str
     decision: Optional[str] = None
+    score: Optional[int] = None          # verification score 0-100
+    pass_score: Optional[int] = None     # KYC_PASS_SCORE
+    blockers: List[str] = Field(default_factory=list)  # why it needs manual review besides the score
     progress: Optional[str] = None
     id_type: Optional[str] = None
     address_input: Optional[str] = None

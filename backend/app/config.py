@@ -84,12 +84,19 @@ class Settings(BaseSettings):
     liveness_yaw_delta: float = 0.10
     liveness_pitch_delta: float = 0.05
 
+    # --- decision ---------------------------------------------------------------
+    # Verification score (0-100) needed to pass; below it -> manual review.
+    kyc_pass_score: int = 40
+    # Checks that must pass for an automatic pass (comma-separated check ids).
+    kyc_required_checks: Annotated[List[str], NoDecode] = Field(
+        default_factory=lambda: ["face_match", "liveness_pose", "liveness_same_person", "address_match"])
+
     # --- document rules ---------------------------------------------------------
     bill_max_age_days: int = 90
     name_match_threshold: int = 80
     address_match_threshold: int = 75
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", "kyc_required_checks", mode="before")
     @classmethod
     def _split_origins(cls, value):
         if isinstance(value, str):

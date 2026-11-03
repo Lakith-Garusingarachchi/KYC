@@ -33,7 +33,9 @@ OPEN_STATUSES = ("draft", "documents_uploaded")
 MAX_LIVENESS_ATTEMPTS = 3
 TURN_STEPS = ["left", "right", "up"]
 
-_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic"}
+# ISO-BMFF brands used by HEIC/HEIF photos (iPhone camera default).
+_HEIF_BRANDS = {b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"}
 
 
 def _sniff(data: bytes) -> Optional[str]:
@@ -45,6 +47,8 @@ def _sniff(data: bytes) -> Optional[str]:
         return "image/webp"
     if data[:5] == b"%PDF-":
         return "application/pdf"
+    if data[4:8] == b"ftyp" and data[8:12] in _HEIF_BRANDS:
+        return "image/heic"
     return None
 
 
@@ -59,7 +63,7 @@ async def _read_upload(upload: UploadFile, label: str, allow_pdf: bool) -> tuple
     mime = _sniff(data)
     allowed = _IMAGE_TYPES | ({"application/pdf"} if allow_pdf else set())
     if mime not in allowed:
-        kinds = "JPG, PNG, WEBP" + (" or PDF" if allow_pdf else "")
+        kinds = "JPG, PNG, WEBP, HEIC" + (" or PDF" if allow_pdf else "")
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"{label} must be {kinds}")
     return data, mime
 

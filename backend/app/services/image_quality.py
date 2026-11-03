@@ -9,6 +9,13 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
+try:  # iPhone HEIC/HEIF photos; converted to JPEG on upload
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+except ImportError:  # pragma: no cover
+    pass
+
 MIN_SHORT_SIDE = 500
 MIN_SHARPNESS = 60.0
 MIN_BRIGHTNESS, MAX_BRIGHTNESS = 50.0, 225.0

@@ -6,8 +6,10 @@ import type { Submission } from "@/lib/types";
 
 const MAX_MB = 10;
 // MIME types plus extensions, so file pickers also list .jpeg / .pdf files.
-const ACCEPT = "image/jpeg,image/png,image/webp,application/pdf,.jpg,.jpeg,.png,.webp,.pdf";
-const ID_HINT = "JPG, JPEG, PNG, WEBP or PDF";
+// HEIC/HEIF is the iPhone camera format; without it iOS greys those photos out in the Files picker.
+const ACCEPT =
+  "image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.pdf";
+const ID_HINT = "JPG, PNG, WEBP, HEIC or PDF";
 
 type Slot = "id_front" | "id_back" | "utility_bill";
 

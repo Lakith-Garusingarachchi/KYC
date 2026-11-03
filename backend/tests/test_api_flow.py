@@ -276,3 +276,29 @@ async def test_text_only_provider_is_rejected_for_documents(client, face_passes,
     sub = (await client.get(f"/kyc/submissions/{sid}")).json()
     assert "cannot read" in sub["extracted"]["identity_error"]
     assert llm_service.normalize_provider("Vertex") == "gemini_vertex"
+
+
+async def test_iphone_heic_photo_is_accepted_and_converted(client, face_passes):
+    import io
+
+    from PIL import Image
+    pillow_heif = pytest.importorskip("pillow_heif")
+    pillow_heif.register_heif_opener()
+
+    rgb = cv2.cvtColor(cv2.imdecode(np.frombuffer(_jpeg(), np.uint8), cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+    buf = io.BytesIO()
+    Image.fromarray(rgb).save(buf, format="HEIF", quality=90)
+    heic = buf.getvalue()
+    assert heic[4:8] == b"ftyp"
+
+    await _register(client, "heic@example.com")
+    sid = (await client.post("/kyc/submissions")).json()["id"]
+    r = await client.post(f"/kyc/submissions/{sid}/documents",
+                          data={"id_type": "nic", "address": "12/3 Galle Road, Colombo 3"},
+                          files={"id_front": ("IMG_1542.HEIC", heic, "image/heic"),
+                                 "utility_bill": ("bill.HEIC", heic, "image/heic")})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["quality"]["id_front"]["readable"] is True       # OpenCV could read the converted JPEG
+    after = (await client.get(f"/kyc/submissions/{sid}")).json()
+    assert after["extracted"]["identity"]["full_name"]          # and the LLM read it in the background

@@ -5,7 +5,9 @@ import { api, ApiError } from "@/lib/api";
 import type { Submission } from "@/lib/types";
 
 const MAX_MB = 10;
-const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp";
+// MIME types plus extensions, so file pickers also list .jpeg / .pdf files.
+const ACCEPT = "image/jpeg,image/png,image/webp,application/pdf,.jpg,.jpeg,.png,.webp,.pdf";
+const ID_HINT = "JPG, JPEG, PNG, WEBP or PDF";
 
 type Slot = "id_front" | "id_back" | "utility_bill";
 
@@ -94,14 +96,14 @@ export default function DocumentsStep({ submission, onUploaded }: {
       </div>
 
       <div className="drops">
-        <FileDrop title={idType === "nic" ? "NIC front" : "Passport photo page"} hint="JPG, PNG or WEBP"
-                  accept={IMAGE_ACCEPT} file={files.id_front} onChange={setFile("id_front")} required />
+        <FileDrop title={idType === "nic" ? "NIC front" : "Passport photo page"} hint={ID_HINT}
+                  accept={ACCEPT} file={files.id_front} onChange={setFile("id_front")} required />
         {idType === "nic" && (
-          <FileDrop title="NIC back" hint="JPG, PNG or WEBP" accept={IMAGE_ACCEPT}
+          <FileDrop title="NIC back" hint={ID_HINT} accept={ACCEPT}
                     file={files.id_back} onChange={setFile("id_back")} />
         )}
         <FileDrop title="Utility bill" hint="Electricity, water, phone or internet — last 3 months. Image or PDF"
-                  accept={`${IMAGE_ACCEPT},application/pdf`} file={files.utility_bill}
+                  accept={ACCEPT} file={files.utility_bill}
                   onChange={setFile("utility_bill")} required />
       </div>
 

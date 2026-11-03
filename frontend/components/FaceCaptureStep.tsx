@@ -31,9 +31,10 @@ interface Capture {
 async function loadLandmarker(): Promise<FaceLandmarker> {
   const { FaceLandmarker, FilesetResolver } = await import("@mediapipe/tasks-vision");
   const fileset = await FilesetResolver.forVisionTasks(WASM_PATH);
-  const attempts: Array<[string, "GPU" | "CPU"]> = [
-    [LOCAL_MODEL, "GPU"], [LOCAL_MODEL, "CPU"], [REMOTE_MODEL, "GPU"], [REMOTE_MODEL, "CPU"],
-  ];
+  // Use the self-hosted model when it was downloaded at build time, otherwise Google's copy.
+  const localOk = await fetch(LOCAL_MODEL, { method: "HEAD" }).then((r) => r.ok).catch(() => false);
+  const model = localOk ? LOCAL_MODEL : REMOTE_MODEL;
+  const attempts: Array<[string, "GPU" | "CPU"]> = [[model, "GPU"], [model, "CPU"]];
   let lastError: unknown;
   for (const [modelAssetPath, delegate] of attempts) {
     try {
@@ -49,12 +50,30 @@ async function loadLandmarker(): Promise<FaceLandmarker> {
   throw lastError ?? new Error("Face tracker failed to load");
 }
 
+async function openCamera(): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 960 } },
+      audio: false,
+    });
+  } catch (err) {
+    // Some webcams/drivers reject the preferred settings; retry with "any camera".
+    const name = err instanceof DOMException ? err.name : "";
+    if (name === "OverconstrainedError" || name === "NotFoundError") {
+      return navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    }
+    throw err;
+  }
+}
+
 function cameraErrorMessage(err: unknown): string {
   const name = err instanceof DOMException ? err.name : "";
   if (name === "NotAllowedError") return "Camera access was blocked. Allow the camera for this site and try again.";
-  if (name === "NotFoundError" || name === "OverconstrainedError") return "No camera was found on this device.";
+  if (name === "NotFoundError" || name === "OverconstrainedError")
+    return "Your browser can't see any camera. Check that the webcam is switched on (many laptops have a " +
+      "camera key or privacy switch) and that it works in another app, then try again.";
   if (name === "NotReadableError") return "The camera is being used by another app. Close it and try again.";
-  return err instanceof Error ? err.message : "Could not start the camera.";
+  return err instanceof Error ? `${err.name}: ${err.message}` : "Could not start the camera.";
 }
 
 export default function FaceCaptureStep({ submission, onAccepted, onEditDocuments }: {
@@ -252,10 +271,7 @@ export default function FaceCaptureStep({ submission, onAccepted, onEditDocument
     try {
       const [challenge, stream, landmarker] = await Promise.all([
         api.challenge(submission.id),
-        navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 960 } },
-          audio: false,
-        }),
+        openCamera(),
         landmarkerRef.current ? Promise.resolve(landmarkerRef.current) : loadLandmarker(),
       ]);
       landmarkerRef.current = landmarker;

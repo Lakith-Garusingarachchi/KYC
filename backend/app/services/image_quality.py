@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 from typing import Dict
 
 import cv2
 import numpy as np
+from PIL import Image, ImageOps
 
 MIN_SHORT_SIDE = 500
 MIN_SHARPNESS = 60.0
@@ -46,3 +48,17 @@ def assess(data: bytes) -> Dict:
         "glare_ratio": round(glare, 3),
         "issues": issues,
     }
+
+
+def normalize_image(data: bytes) -> bytes:
+    """Apply the EXIF rotation and drop metadata (GPS etc.), re-saving as JPEG.
+
+    The LLM and the face models then see exactly the same, upright pixels.
+    """
+    with Image.open(io.BytesIO(data)) as img:
+        img = ImageOps.exif_transpose(img)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=92, optimize=True)
+    return out.getvalue()

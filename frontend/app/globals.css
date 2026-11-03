@@ -228,3 +228,28 @@ input:focus, textarea:focus, .btn:focus-visible, .choice:focus-within, .drop:foc
   .choices { grid-template-columns: 1fr; }
   .instruction { font-size: 18px; }
 }
+
+/* report */
+.report-head .decision { margin-bottom: 18px; }
+.score { margin-top: 4px; }
+.score-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; font-weight: 600; }
+.score-head strong { font-size: 22px; }
+.pass-text { color: var(--pass); }
+.warn-text { color: var(--warn); }
+.score-bar { position: relative; height: 12px; border-radius: 99px; background: var(--surface-2); overflow: visible; margin-bottom: 6px; }
+.score-fill { height: 100%; border-radius: 99px; }
+.score-fill.ok { background: var(--pass); }
+.score-fill.low { background: var(--warn); }
+.score-mark { position: absolute; top: -4px; width: 2px; height: 20px; background: var(--text); opacity: 0.6; transform: translateX(-1px); }
+.report-meta { margin-top: 14px; }
+
+@media print {
+  :root { --bg: #fff; --surface: #fff; --surface-2: #eef0f3; --border: #d0d5dc; --text: #111; --muted: #444;
+          --pass: #127a46; --pass-soft: #e3f5ec; --warn: #8a5100; --warn-soft: #fff1d6; --fail: #b42318; --fail-soft: #fdecea; }
+  body { background: #fff; }
+  .topbar .btn, .stepper, .no-print { display: none !important; }
+  .card { box-shadow: none; }
+  .checks li, .report-head, .facts > div { break-inside: avoid; }
+  .shell { padding-top: 8px; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

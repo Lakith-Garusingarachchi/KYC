@@ -1,0 +1,9 @@
+.env
+data/
+secrets/*
+!secrets/.gitkeep
+models/*.onnx
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/

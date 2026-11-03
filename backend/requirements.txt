@@ -1,0 +1,27 @@
+# --- API ---
+fastapi>=0.115.0,<1.0.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.7.4,<3.0.0
+pydantic-settings>=2.7.0
+email-validator>=2.1.0
+python-multipart>=0.0.9
+
+# --- storage / auth ---
+sqlalchemy[asyncio]>=2.0.36,<2.1
+aiosqlite>=0.20.0
+redis>=5.0.0
+bcrypt>=4.1.0
+PyJWT>=2.8.0
+cryptography>=42.0.0
+
+# --- LLM adapters (copied from el-aiee src/llm) ---
+httpx>=0.27.0
+anthropic>=0.125.0,<1.0.0
+google-auth>=2.30.0   # Gemini on Vertex AI (service-account JSON -> OAuth2 token)
+requests>=2.31.0
+
+# --- face + image checks (CPU) ---
+opencv-python-headless>=4.10.0,<5
+numpy>=1.26.0
+pillow>=10.0.0
+rapidfuzz>=3.6.0

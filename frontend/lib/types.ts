@@ -28,6 +28,9 @@ export interface Submission {
   id: string;
   status: SubmissionStatus;
   decision: Decision | null;
+  score: number | null;
+  pass_score: number | null;
+  blockers: string[];
   progress: string | null;
   id_type: "nic" | "passport" | null;
   address_input: string | null;

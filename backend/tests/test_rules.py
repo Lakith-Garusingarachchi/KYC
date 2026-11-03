@@ -80,3 +80,44 @@ def test_pose_turns_relative_to_center():
     assert pose_step_passed("right", right_yaw, right_pitch, base_yaw, base_pitch, 0.1, 0.05)
     assert pose_step_passed("up", up_yaw, up_pitch, base_yaw, base_pitch, 0.1, 0.05)
     assert not pose_step_passed("up", base_yaw, base_pitch, base_yaw, base_pitch, 0.1, 0.05)
+
+
+# --- score + decision ---------------------------------------------------------------
+from app.services import decision  # noqa: E402
+
+
+def _c(cid, status, label=None):
+    return {"id": cid, "category": "x", "label": label or cid, "status": status, "detail": ""}
+
+
+REQUIRED_PASS = [_c("face_match", "pass"), _c("liveness_pose", "pass"),
+                 _c("liveness_same_person", "pass"), _c("address_match", "pass")]
+
+
+def test_score_weights_review_as_half():
+    assert decision.score(REQUIRED_PASS) == 100
+    half = [dict(c, status="warn") for c in REQUIRED_PASS]
+    assert decision.score(half) == 50
+    assert decision.score([]) == 0
+
+
+def test_pass_score_threshold(monkeypatch):
+    from app.config import get_settings
+    checks = REQUIRED_PASS + [_c("id_authenticity", "warn"), _c("bill_name", "warn"), _c("bill_authenticity", "warn"),
+                              _c("id_valid", "warn"), _c("bill_valid", "warn"), _c("duplicate", "fail"),
+                              _c("upload_quality", "fail"), _c("liveness_ai", "fail")]
+    result = decision.evaluate(checks)
+    assert result["score"] < 100 and result["blockers"] == []
+    monkeypatch.setattr(get_settings(), "kyc_pass_score", result["score"])
+    assert decision.evaluate(checks)["decision"] == "approved"      # score == pass score -> pass
+    monkeypatch.setattr(get_settings(), "kyc_pass_score", result["score"] + 1)
+    assert decision.evaluate(checks)["decision"] == "manual_review"
+
+
+def test_required_and_hard_checks_block_a_pass():
+    checks = [dict(c) for c in REQUIRED_PASS] + [_c("id_valid", "pass")]
+    checks[0]["status"] = "warn"   # face_match not passed
+    result = decision.evaluate(checks)
+    assert result["decision"] == "manual_review" and result["blockers"] == ["face_match"]
+    hard = REQUIRED_PASS + [_c("id_expiry", "fail", "Document not expired")]
+    assert decision.evaluate(hard)["blockers"] == ["Document not expired"]

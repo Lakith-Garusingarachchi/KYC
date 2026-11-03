@@ -114,10 +114,26 @@ def test_pass_score_threshold(monkeypatch):
     assert decision.evaluate(checks)["decision"] == "manual_review"
 
 
-def test_required_and_hard_checks_block_a_pass():
-    checks = [dict(c) for c in REQUIRED_PASS] + [_c("id_valid", "pass")]
+def test_required_checks_block_a_pass_only_when_configured(monkeypatch):
+    from app.config import get_settings
+    checks = [dict(c) for c in REQUIRED_PASS] + [_c("id_expiry", "fail", "Document not expired")]
     checks[0]["status"] = "warn"   # face_match not passed
+    assert decision.evaluate(checks)["decision"] == "approved"           # score decides by default
+    monkeypatch.setattr(get_settings(), "kyc_required_checks", ["face_match"])
     result = decision.evaluate(checks)
     assert result["decision"] == "manual_review" and result["blockers"] == ["face_match"]
-    hard = REQUIRED_PASS + [_c("id_expiry", "fail", "Document not expired")]
-    assert decision.evaluate(hard)["blockers"] == ["Document not expired"]
+    assert "Document not expired" in result["issues"]
+
+
+def test_missed_nod_is_review_but_missed_turn_is_fail():
+    face = {"pose_checks": {"left": True, "right": True, "up": False}, "same_person": True,
+            "frames": {"center": {"yaw": 0.0, "pitch": 0.55}, "up": {"yaw": 0.0, "pitch": 0.53}},
+            "thresholds": {"yaw_delta": 0.1, "pitch_delta": 0.03}, "face_match": {"verdict": "match", "score": 0.5}}
+    checks = []
+    decision._face_checks(checks, face, None)
+    pose = checks[0]
+    assert pose["status"] == "warn" and "up +0.02 (needs 0.03)" in pose["detail"]
+    face["pose_checks"]["left"] = False
+    checks = []
+    decision._face_checks(checks, face, None)
+    assert checks[0]["status"] == "fail"

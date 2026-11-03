@@ -7,7 +7,7 @@ import type { Check, Submission } from "@/lib/types";
 const POLL_MS = 2000;
 
 const DECISION_TEXT = {
-  approved: { icon: "✓", title: "Passed", body: "Verification score is above the pass mark and all required checks passed." },
+  approved: { icon: "✓", title: "Passed", body: "The verification score is at or above the pass mark." },
   manual_review: {
     icon: "!",
     title: "Manual review required",
@@ -103,6 +103,7 @@ export default function ResultStep({ submission, onChange, onStartOver }: {
     (acc[c.category] ||= []).push(c);
     return acc;
   }, {});
+  const issues = submission.checks.filter((c) => c.status !== "pass");
   const idd = submission.extracted.identity ?? {};
   const bill = submission.extracted.bill ?? {};
   const match = submission.face.face_match;
@@ -129,6 +130,14 @@ export default function ResultStep({ submission, onChange, onStartOver }: {
                 <li>Score {submission.score}% is below the pass mark of {submission.pass_score}%</li>
               )}
               {submission.blockers.map((b) => <li key={b}>Required check not passed: {b}</li>)}
+            </ul>
+          </div>
+        )}
+        {decision === "approved" && issues.length > 0 && (
+          <div className="alert info" style={{ marginTop: 16, marginBottom: 0 }}>
+            <strong>Points to note:</strong>
+            <ul className="tips" style={{ margin: "6px 0 0", color: "inherit" }}>
+              {issues.map((c) => <li key={c.id}>{c.label}{c.status === "fail" ? " (failed)" : " (review)"}</li>)}
             </ul>
           </div>
         )}

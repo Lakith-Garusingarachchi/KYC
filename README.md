@@ -104,14 +104,13 @@ The adapters (`backend/app/llm`) are the el-aiee ones, unchanged. `backend/.env`
    The LLM also reviews the frames for spoof signs (screens, prints, masks). Users get 3 attempts.
 5. **Decision** – every check comes out pass, review or fail, and adds up to a **verification score** (0–100%).
    Each check has a weight (face match 20, address match 10, liveness 10…); a pass counts fully, a review counts half,
-   a fail counts zero. The result is **Passed** (`approved`) or **Manual review required** (`manual_review`):
-   - score below `KYC_PASS_SCORE` (default 40) → manual review
-   - any check in `KYC_REQUIRED_CHECKS` not passed (default: face match, head turns, same person, address match) → manual review
-   - a hard failure (not an ID, invalid NIC number, expired document, not a bill, bill too old, replayed still image) → manual review
-   - otherwise → passed
+   a fail counts zero.
+   - score at or above `KYC_PASS_SCORE` → **Passed**; any review/fail checks are listed as "points to note"
+   - score below `KYC_PASS_SCORE` → **Manual review required**
+   - optional: `KYC_REQUIRED_CHECKS` (comma-separated check ids, e.g. `face_match,liveness_pose`) must pass regardless of the score
 
    Minor document notes (wear, glare, normal meter-reader handwriting) don't count against the score; only major tamper signs do.
-   The result page shows the score, the reasons for review and every check, and can be saved as a PDF.
+   The result page shows the score, every check (issues as "points to note" when it passes), and can be saved as a PDF.
 
    The checks:
    - NIC number format and its encoded birth date and gender against the printed details

@@ -177,12 +177,31 @@ def _address_checks(checks: List[Dict], typed: str, bill: Dict, idd: Dict, llm: 
                                             else " — the ID may show an older address"))
 
 
+def _pose_detail(face: Dict, step: str) -> str:
+    """How far the head moved for one step, relative to the centre frame."""
+    frames = face.get("frames") or {}
+    centre, turned = frames.get("center") or {}, frames.get(step) or {}
+    limits = face.get("thresholds") or {}
+    if step in ("left", "right") and "yaw" in centre and "yaw" in turned:
+        moved = turned["yaw"] - centre["yaw"] if step == "left" else centre["yaw"] - turned["yaw"]
+        return f"{step} {moved:+.2f} (needs {limits.get('yaw_delta', 0):.2f})"
+    if step in ("up", "down") and "pitch" in centre and "pitch" in turned:
+        moved = centre["pitch"] - turned["pitch"] if step == "up" else turned["pitch"] - centre["pitch"]
+        return f"{step} {moved:+.2f} (needs {limits.get('pitch_delta', 0):.2f})"
+    return step
+
+
 def _face_checks(checks: List[Dict], face: Dict, review: Optional[Dict]) -> None:
     poses = face.get("pose_checks") or {}
     failed = [s for s, ok in poses.items() if not ok]
-    _check(checks, "liveness_pose", "liveness", "Head turned as instructed",
-           PASS if poses and not failed else FAIL,
-           "All movements detected" if poses and not failed else f"Not detected: {', '.join(failed) or 'all'}")
+    if poses and not failed:
+        status, detail = PASS, "All movements detected"
+    else:
+        # Left/right turns are the strong liveness signal; a missed nod alone only needs a look.
+        vertical_only = bool(failed) and all(s in ("up", "down") for s in failed)
+        status = WARN if vertical_only else FAIL
+        detail = "Not detected: " + (", ".join(_pose_detail(face, s) for s in failed) or "all")
+    _check(checks, "liveness_pose", "liveness", "Head turned as instructed", status, detail)
     _check(checks, "liveness_same_person", "liveness", "Same person in every frame",
            PASS if face.get("same_person") else FAIL,
            ", ".join(f"{k} {v:.2f}" for k, v in (face.get("same_person_scores") or {}).items()) or "No faces")
@@ -271,10 +290,6 @@ WEIGHTS: Dict[str, int] = {
     "duplicate": 5,
 }
 _POINTS = {PASS: 1.0, WARN: 0.5, FAIL: 0.0}
-# A fail here always needs a person, whatever the score.
-HARD_FAILS = {"id_valid", "id_number", "id_expiry", "bill_valid", "bill_recent", "liveness_static"}
-
-
 def score(checks: List[Dict]) -> int:
     """0-100: weighted share of checks passed (review counts half)."""
     total = sum(WEIGHTS.get(c["id"], 5) for c in checks)
@@ -287,8 +302,9 @@ def score(checks: List[Dict]) -> int:
 def evaluate(checks: List[Dict]) -> Dict:
     """Score the checks and decide: approved (passed) or manual_review.
 
-    Manual review when the score is below KYC_PASS_SCORE, when a required check
-    (KYC_REQUIRED_CHECKS) did not pass, or when a hard check failed.
+    The score decides: at or above KYC_PASS_SCORE the verification passes and any
+    review/fail checks are only listed as issues. Below it, manual review.
+    Optionally, KYC_REQUIRED_CHECKS lists checks that must pass regardless of the score.
     """
     settings = get_settings()
     by_id = {c["id"]: c for c in checks}
@@ -297,9 +313,6 @@ def evaluate(checks: List[Dict]) -> Dict:
         check = by_id.get(cid)
         if check is None or check["status"] != PASS:
             blockers.append(check["label"] if check else f"{cid} (not run)")
-    for c in checks:
-        if c["status"] == FAIL and c["id"] in HARD_FAILS and c["label"] not in blockers:
-            blockers.append(c["label"])
     pct = score(checks)
     below = pct < settings.kyc_pass_score
     return {
@@ -308,6 +321,7 @@ def evaluate(checks: List[Dict]) -> Dict:
         "pass_score": settings.kyc_pass_score,
         "blockers": blockers,
         "below_pass_score": below,
+        "issues": [c["label"] for c in checks if c["status"] != PASS],
     }
 
 

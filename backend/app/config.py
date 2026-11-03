@@ -82,14 +82,14 @@ class Settings(BaseSettings):
     face_reject_threshold: float = 0.25
     liveness_challenge_ttl_seconds: int = 300
     liveness_yaw_delta: float = 0.10
-    liveness_pitch_delta: float = 0.05
+    liveness_pitch_delta: float = 0.03
 
     # --- decision ---------------------------------------------------------------
     # Verification score (0-100) needed to pass; below it -> manual review.
     kyc_pass_score: int = 40
-    # Checks that must pass for an automatic pass (comma-separated check ids).
-    kyc_required_checks: Annotated[List[str], NoDecode] = Field(
-        default_factory=lambda: ["face_match", "liveness_pose", "liveness_same_person", "address_match"])
+    # Optional: checks that must pass regardless of the score (comma-separated check ids).
+    # Empty = the score alone decides.
+    kyc_required_checks: Annotated[List[str], NoDecode] = Field(default_factory=list)
 
     # --- document rules ---------------------------------------------------------
     bill_max_age_days: int = 90

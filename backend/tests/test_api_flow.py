@@ -167,11 +167,35 @@ async def test_old_bill_and_wrong_address_are_flagged(client, face_passes, fake_
     by_id = {c["id"]: c for c in final["checks"]}
     assert by_id["bill_recent"]["status"] == "fail"
     assert by_id["address_match"]["status"] == "fail"
-    # The score alone would pass, but a required check and a hard check failed.
+    # The score decides: above the pass mark it passes; the failed checks are only listed.
     assert final["score"] >= final["pass_score"]
+    assert final["decision"] == "approved" and final["blockers"] == []
+
+
+async def test_required_checks_from_env_block_a_pass(client, face_passes, fake_llm, monkeypatch):
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), "kyc_required_checks", ["address_match"])
+    fake_llm.overrides = {"address_comparison": {"same_address": False, "confidence": 0.95, "differences": ["city"]},
+                          "utility_bill": {"service_address": "45 Kandy Road, Kurunegala"}}
+    await _register(client, "req@example.com")
+    sid = (await client.post("/kyc/submissions")).json()["id"]
+    await _upload_docs(client, sid)
+    await _do_liveness(client, sid)
+    final = (await client.get(f"/kyc/submissions/{sid}")).json()
     assert final["decision"] == "manual_review"
-    assert "Typed address matches the bill" in final["blockers"]
-    assert any(b.startswith("Bill issued") for b in final["blockers"])
+    assert final["blockers"] == ["Typed address matches the bill"]
+
+
+async def test_low_score_needs_manual_review(client, face_passes, fake_llm, monkeypatch):
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), "kyc_pass_score", 99)
+    fake_llm.overrides = {"utility_bill": {"account_holder_name": "Someone Else"}}
+    await _register(client, "low@example.com")
+    sid = (await client.post("/kyc/submissions")).json()["id"]
+    await _upload_docs(client, sid)
+    await _do_liveness(client, sid)
+    final = (await client.get(f"/kyc/submissions/{sid}")).json()
+    assert final["score"] < 99 and final["decision"] == "manual_review"
 
 
 async def test_failed_liveness_allows_retry(client, monkeypatch):
@@ -191,8 +215,9 @@ async def test_failed_liveness_allows_retry(client, monkeypatch):
     third = (await _do_liveness(client, sid)).json()
     assert third["accepted"] is True and third["attempts_left"] == 0  # out of retries -> decided
     final = (await client.get(f"/kyc/submissions/{sid}")).json()
-    assert final["decision"] == "manual_review"
-    assert "Head turned as instructed" in final["blockers"]
+    by_id = {c["id"]: c for c in final["checks"]}
+    assert by_id["liveness_pose"]["status"] == "fail"   # left/right never detected
+    assert final["decision"] == ("approved" if final["score"] >= final["pass_score"] else "manual_review")
 
 
 async def test_minor_tamper_notes_still_pass(client, face_passes, fake_llm):

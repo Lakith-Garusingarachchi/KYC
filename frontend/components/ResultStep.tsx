@@ -7,18 +7,32 @@ import type { Check, Submission } from "@/lib/types";
 const POLL_MS = 2000;
 
 const DECISION_TEXT = {
-  approved: { icon: "✓", title: "Identity verified", body: "All checks passed." },
+  approved: { icon: "✓", title: "Passed", body: "Verification score is above the pass mark and all required checks passed." },
   manual_review: {
     icon: "!",
-    title: "Sent for manual review",
-    body: "Some checks need a person to look at them. We'll update you once they're reviewed.",
+    title: "Manual review required",
+    body: "A person needs to look at this verification before it can pass.",
   },
-  rejected: {
-    icon: "✕",
-    title: "We couldn't verify your identity",
-    body: "One or more required checks failed. See the details below, then try again with clearer documents.",
-  },
+  // Results stored before the score was introduced.
+  rejected: { icon: "!", title: "Manual review required", body: "A person needs to look at this verification." },
 } as const;
+
+function ScoreMeter({ score, passScore }: { score: number; passScore: number }) {
+  const ok = score >= passScore;
+  return (
+    <div className="score">
+      <div className="score-head">
+        <span>Verification score</span>
+        <strong className={ok ? "pass-text" : "warn-text"}>{score}%</strong>
+      </div>
+      <div className="score-bar" role="img" aria-label={`Score ${score}% of 100, pass mark ${passScore}%`}>
+        <div className={`score-fill ${ok ? "ok" : "low"}`} style={{ width: `${score}%` }} />
+        <div className="score-mark" style={{ left: `${passScore}%` }} title={`Pass mark ${passScore}%`} />
+      </div>
+      <div className="small muted">Pass mark {passScore}% · review counts as half a pass</div>
+    </div>
+  );
+}
 
 const CATEGORY_TITLES: Record<string, string> = {
   document: "Identity document",
@@ -95,11 +109,31 @@ export default function ResultStep({ submission, onChange, onStartOver }: {
 
   return (
     <>
-      <div className={`card decision ${decision}`}>
-        <div className="icon" aria-hidden>{text.icon}</div>
-        <div>
-          <h2 style={{ marginBottom: 4 }}>{text.title}</h2>
-          <div className="muted">{text.body}</div>
+      <div className="card report-head">
+        <div className={`decision ${decision === "rejected" ? "manual_review" : decision}`}>
+          <div className="icon" aria-hidden>{text.icon}</div>
+          <div>
+            <h2 style={{ marginBottom: 4 }}>{text.title}</h2>
+            <div className="muted">{text.body}</div>
+          </div>
+        </div>
+        {submission.score != null && submission.pass_score != null && (
+          <ScoreMeter score={submission.score} passScore={submission.pass_score} />
+        )}
+        {decision !== "approved" && (submission.blockers.length > 0 ||
+          (submission.score != null && submission.pass_score != null && submission.score < submission.pass_score)) && (
+          <div className="alert warn" style={{ marginTop: 16, marginBottom: 0 }}>
+            <strong>Why it needs review:</strong>
+            <ul className="tips" style={{ margin: "6px 0 0", color: "inherit" }}>
+              {submission.score != null && submission.pass_score != null && submission.score < submission.pass_score && (
+                <li>Score {submission.score}% is below the pass mark of {submission.pass_score}%</li>
+              )}
+              {submission.blockers.map((b) => <li key={b}>Required check not passed: {b}</li>)}
+            </ul>
+          </div>
+        )}
+        <div className="small muted report-meta">
+          Report {submission.id.slice(0, 8).toUpperCase()} · {new Date(submission.updated_at).toLocaleString()}
         </div>
       </div>
 
@@ -140,7 +174,8 @@ export default function ResultStep({ submission, onChange, onStartOver }: {
         ]} />
       </div>
 
-      <div className="row" style={{ justifyContent: "flex-end", marginTop: 16 }}>
+      <div className="row no-print" style={{ justifyContent: "flex-end", marginTop: 16 }}>
+        <button className="btn secondary" onClick={() => window.print()}>Download report (PDF)</button>
         <button className="btn secondary" onClick={onStartOver}>Start a new verification</button>
       </div>
     </>

@@ -30,6 +30,8 @@ YUNET_FILE = "face_detection_yunet_2023mar.onnx"
 SFACE_FILE = "face_recognition_sface_2021dec.onnx"
 
 _MAX_SIDE = 1280
+DOC_MAX_SIDE = 2400        # keep more detail when looking for the small ID portrait
+_MAX_UPSCALED_SIDE = 3000
 
 
 class FaceModelsMissingError(RuntimeError):
@@ -71,16 +73,24 @@ def pose_from_landmarks(right_eye, left_eye, nose, mouth_r, mouth_l) -> Tuple[fl
     return round(yaw, 4), round(pitch, 4)
 
 
-def decode_image(data: bytes) -> np.ndarray:
+def decode_image(data: bytes, max_side: int = _MAX_SIDE) -> np.ndarray:
     arr = np.frombuffer(data, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)  # applies EXIF orientation
     if img is None:
         raise ValueError("not a readable image (use JPG, PNG or WEBP)")
     h, w = img.shape[:2]
-    scale = _MAX_SIDE / max(h, w)
+    scale = max_side / max(h, w)
     if scale < 1:
         img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
     return img
+
+
+def enhance_contrast(img: np.ndarray) -> np.ndarray:
+    """CLAHE on the lightness channel: brings out faces under laminate glare or guilloche."""
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l_chan, a_chan, b_chan = cv2.split(lab)
+    l_chan = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(l_chan)
+    return cv2.cvtColor(cv2.merge([l_chan, a_chan, b_chan]), cv2.COLOR_LAB2BGR)
 
 
 class FaceEngine:
@@ -93,33 +103,50 @@ class FaceEngine:
                 f"Run backend/scripts/download_models.sh"
             )
         self._detector = cv2.FaceDetectorYN.create(str(det_path), "", (320, 320), 0.7, 0.3, 5000)
+        # ID photos are small, printed and covered by security patterns: accept lower scores.
+        self._doc_detector = cv2.FaceDetectorYN.create(str(det_path), "", (320, 320), 0.5, 0.3, 5000)
         self._recognizer = cv2.FaceRecognizerSF.create(str(rec_path), "")
         self._lock = threading.Lock()
 
     # -- detection ----------------------------------------------------------------
-    def detect(self, img: np.ndarray, *, upscale_small: bool = False) -> List[DetectedFace]:
-        work = img
-        h, w = work.shape[:2]
-        if upscale_small and max(h, w) < 900:
-            factor = 900 / max(h, w)
-            work = cv2.resize(work, (int(w * factor), int(h * factor)), interpolation=cv2.INTER_CUBIC)
-            h, w = work.shape[:2]
+    def detect(self, img: np.ndarray, *, document: bool = False) -> List[DetectedFace]:
+        h, w = img.shape[:2]
+        detector = self._doc_detector if document else self._detector
         with self._lock:
-            self._detector.setInputSize((w, h))
-            _, faces = self._detector.detect(work)
+            detector.setInputSize((w, h))
+            _, faces = detector.detect(img)
         if faces is None:
             return []
-        found = [DetectedFace(row=f, image=work) for f in faces]
+        found = [DetectedFace(row=f, image=img) for f in faces]
         return sorted(found, key=lambda f: f.area, reverse=True)
 
     def detect_document_face(self, img: np.ndarray) -> Optional[DetectedFace]:
-        """Largest face on an ID/passport, trying the four rotations."""
+        """The portrait on an ID/passport.
+
+        Tries the four rotations, a contrast-enhanced copy and an upscaled copy, and
+        keeps the most confident detection (the largest face of each pass, so the
+        small "ghost" portrait is not picked over the main photo).
+        """
         rotations = [None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]
         for rot in rotations:
-            candidate = img if rot is None else cv2.rotate(img, rot)
-            faces = self.detect(candidate, upscale_small=True)
-            if faces:
-                return faces[0]
+            base = img if rot is None else cv2.rotate(img, rot)
+            best: Optional[DetectedFace] = None
+            for variant in (base, enhance_contrast(base)):
+                for scale in (1.0, 1.8):
+                    work = variant
+                    if scale != 1.0:
+                        h, w = variant.shape[:2]
+                        factor = min(scale, _MAX_UPSCALED_SIDE / max(h, w))
+                        if factor <= 1.05:
+                            continue
+                        work = cv2.resize(variant, (int(w * factor), int(h * factor)), interpolation=cv2.INTER_CUBIC)
+                    faces = self.detect(work, document=True)
+                    if faces and (best is None or faces[0].score > best.score):
+                        best = faces[0]
+                if best is not None and best.score >= 0.8:
+                    return best
+            if best is not None:
+                return best
         return None
 
     # -- recognition ----------------------------------------------------------------
@@ -263,7 +290,7 @@ def analyze_liveness(frames: Dict[str, bytes], steps: List[str], id_image: Optio
     match: Dict = {"score": None, "verdict": "no_id_face"}
     if id_image is not None and "center" in embeddings:
         try:
-            id_face = engine.detect_document_face(decode_image(id_image))
+            id_face = engine.detect_document_face(decode_image(id_image, DOC_MAX_SIDE))
         except ValueError:
             id_face = None
         if id_face is None:
@@ -297,3 +324,42 @@ def analyze_liveness(frames: Dict[str, bytes], steps: List[str], id_image: Optio
             "pitch_delta": settings.liveness_pitch_delta,
         },
     }
+
+
+def _verdict(score: float) -> str:
+    settings = get_settings()
+    if score >= settings.face_match_threshold:
+        return "match"
+    return "mismatch" if score < settings.face_reject_threshold else "uncertain"
+
+
+def match_with_photo_box(id_image: bytes, box: List[float], frame: bytes) -> Optional[Dict]:
+    """Second try at the face match, using the portrait box the LLM found on the ID.
+
+    `box` is [left, top, right, bottom] as fractions of the ID image. The portrait
+    is cropped with a margin and enlarged, which finds faces the full-image pass
+    misses (small, low-contrast or patterned ID photos).
+    """
+    if not box or len(box) != 4:
+        return None
+    left, top, right, bottom = (float(v) for v in box)
+    if not (0 <= left < right <= 1 and 0 <= top < bottom <= 1) or (right - left) * (bottom - top) < 0.002:
+        return None
+    engine = get_face_engine()
+    img = decode_image(id_image, DOC_MAX_SIDE)
+    h, w = img.shape[:2]
+    mx, my = (right - left) * w * 0.3, (bottom - top) * h * 0.3
+    x0, y0 = max(int(left * w - mx), 0), max(int(top * h - my), 0)
+    x1, y1 = min(int(right * w + mx), w), min(int(bottom * h + my), h)
+    crop = img[y0:y1, x0:x1]
+    if crop.size == 0:
+        return None
+    target_w = 360
+    crop = cv2.resize(crop, (target_w, max(1, int(crop.shape[0] * target_w / crop.shape[1]))),
+                      interpolation=cv2.INTER_CUBIC)
+    id_face = engine.detect_document_face(crop)
+    frame_faces = engine.detect(decode_image(frame))
+    if id_face is None or not frame_faces:
+        return None
+    score = engine.similarity(engine.embed(id_face), engine.embed(frame_faces[0]))
+    return {"score": score, "center_score": score, "verdict": _verdict(score), "source": "id_photo_box"}

@@ -22,15 +22,34 @@ KYC/
 ## Run it
 
 ```bash
-sh backend/scripts/init_env.sh      # creates backend/.env with a new auth secret + file-encryption key
-# edit backend/.env: pick LLM_PROVIDER and add that provider's key, e.g.
-#   LLM_PROVIDER=gemini
-#   GEMINI_API_KEY=...
+# creates (or cleans up) backend/.env: keeps existing values, generates the auth secret
+# and file-encryption key, and takes overrides from the environment
+LLM_PROVIDER=claude ANTHROPIC_API_KEY=sk-ant-... sh backend/scripts/init_env.sh
 docker compose up --build
 ```
 
+After changing `backend/.env`, restart the backend: `docker compose up -d --force-recreate backend`.
+
 - App: http://localhost:3000
 - API docs: http://localhost:8000/docs
+
+### Deploy on a server with Cloudflare Tunnel (no nginx, no open ports)
+
+1. In the Cloudflare dashboard: **Zero Trust → Networks → Tunnels → Create a tunnel** (type *Cloudflared*).
+   Copy the tunnel token. Under **Public hostname** add e.g. `kyc.example.com` → service `HTTP` → `frontend:3000`.
+2. On the server:
+   ```bash
+   git clone <repo> KYC && cd KYC
+   sh backend/scripts/init_env.sh                 # new secrets for this server; then add the LLM key
+   echo "CLOUDFLARE_TUNNEL_TOKEN=<token>" > .env  # read by docker compose
+   docker compose --profile tunnel up -d --build
+   ```
+3. In `backend/.env` set `FRONTEND_URL=https://kyc.example.com`, `CORS_ORIGINS=https://kyc.example.com`,
+   `AUTH_COOKIE_SECURE=true` (and `GOOGLE_REDIRECT_URI=https://kyc.example.com/api/auth/google/callback` if you use Google login),
+   then `docker compose up -d --force-recreate backend`.
+
+Ports 3000/8000 are bound to 127.0.0.1, so the app is only reachable through the tunnel.
+Back up the `kyc_backend-data` volume **and** `FILE_ENCRYPTION_KEY` together — the files can't be read without the key.
 
 ### Local development (without Docker)
 
@@ -83,10 +102,16 @@ The adapters (`backend/app/llm`) are the el-aiee ones, unchanged. `backend/.env`
    - the face matches the ID photo
 
    The LLM also reviews the frames for spoof signs (screens, prints, masks). Users get 3 attempts.
-5. **Decision** – the rules engine produces pass, review or fail checks, then a decision:
-   - any fail → `rejected`
-   - any review → `manual_review`
-   - otherwise → `approved`
+5. **Decision** – every check comes out pass, review or fail, and adds up to a **verification score** (0–100%).
+   Each check has a weight (face match 20, address match 10, liveness 10…); a pass counts fully, a review counts half,
+   a fail counts zero. The result is **Passed** (`approved`) or **Manual review required** (`manual_review`):
+   - score below `KYC_PASS_SCORE` (default 40) → manual review
+   - any check in `KYC_REQUIRED_CHECKS` not passed (default: face match, head turns, same person, address match) → manual review
+   - a hard failure (not an ID, invalid NIC number, expired document, not a bill, bill too old, replayed still image) → manual review
+   - otherwise → passed
+
+   Minor document notes (wear, glare, normal meter-reader handwriting) don't count against the score; only major tamper signs do.
+   The result page shows the score, the reasons for review and every check, and can be saved as a PDF.
 
    The checks:
    - NIC number format and its encoded birth date and gender against the printed details
@@ -118,6 +143,6 @@ The tests cover:
 
 - LLM tamper detection is a signal, not proof. Real verification needs an authoritative source (DRP NIC check, e-passport chip).
 - Active liveness (random head turns) stops photos and simple replays, but it is not a certified presentation-attack detector.
-- Tune the thresholds in `.env` with 50–100 real and fake samples before going live.
+- Tune the thresholds with 50–100 real and fake samples before going live. They default in `backend/app/config.py` and can be overridden in `.env` (e.g. `FACE_MATCH_THRESHOLD`, `LIVENESS_YAW_DELTA`, `BILL_MAX_AGE_DAYS`).
 - There is no staff review screen yet. `manual_review` cases are visible in the database.
 - Sending ID images to an external LLM API is a data transfer. Use API tiers with no training or retention, and get consent.

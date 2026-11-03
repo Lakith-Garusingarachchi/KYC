@@ -1,0 +1,47 @@
+# Runs the whole KYC MVP:  docker compose up --build
+#   frontend  http://localhost:3000   (Next.js; proxies /api/* to the backend)
+#   backend   http://localhost:8000   (FastAPI; API docs at /docs)
+#   redis     internal only
+name: kyc
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: sqlite+aiosqlite:////app/data/kyc.db
+      UPLOAD_DIR: /app/data/uploads
+    volumes:
+      - backend-data:/app/data
+      - ./backend/secrets:/app/secrets:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  backend-data:

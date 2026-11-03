@@ -21,6 +21,9 @@ SYSTEM_PROMPT = (
 
 _ASSESSMENT = {"type": "string", "enum": ["looks_genuine", "suspicious", "cannot_tell"]}
 _STR_LIST = {"type": "array", "items": {"type": "string"}}
+# none: nothing found; minor: wear, glare, print quirks, normal handwriting;
+# major: signs that a name, number, photo, address or date was changed.
+_SEVERITY = {"type": "string", "enum": ["none", "minor", "major"]}
 
 ID_SCHEMA: Dict = {
     "type": "object",
@@ -38,8 +41,14 @@ ID_SCHEMA: Dict = {
         "mrz_line1": {"type": "string"},
         "mrz_line2": {"type": "string"},
         "has_photo": {"type": "boolean"},
+        "photo_box": {
+            "type": "array", "items": {"type": "number"},
+            "description": "Main portrait on image 1 as [left, top, right, bottom], fractions 0-1 of the "
+                           "image width/height; empty if there is no portrait",
+        },
         "text_legible": {"type": "boolean"},
         "tamper_signs": _STR_LIST,
+        "tamper_severity": _SEVERITY,
         "quality_issues": _STR_LIST,
         "authenticity_assessment": _ASSESSMENT,
         "notes": {"type": "string"},
@@ -47,7 +56,8 @@ ID_SCHEMA: Dict = {
     "required": [
         "is_identity_document", "document_type", "issuing_country", "full_name", "id_number",
         "date_of_birth", "gender", "address", "expiry_date", "nationality", "mrz_line1", "mrz_line2",
-        "has_photo", "text_legible", "tamper_signs", "quality_issues", "authenticity_assessment", "notes",
+        "has_photo", "photo_box", "text_legible", "tamper_signs", "tamper_severity", "quality_issues",
+        "authenticity_assessment", "notes",
     ],
 }
 
@@ -63,12 +73,14 @@ BILL_SCHEMA: Dict = {
         "bill_date": {"type": "string", "description": "YYYY-MM-DD issue/statement date, or empty"},
         "account_number": {"type": "string"},
         "tamper_signs": _STR_LIST,
+        "tamper_severity": _SEVERITY,
         "authenticity_assessment": _ASSESSMENT,
         "notes": {"type": "string"},
     },
     "required": [
         "is_utility_bill", "bill_type", "issuer", "account_holder_name", "service_address",
-        "billing_address", "bill_date", "account_number", "tamper_signs", "authenticity_assessment", "notes",
+        "billing_address", "bill_date", "account_number", "tamper_signs", "tamper_severity",
+        "authenticity_assessment", "notes",
     ],
 }
 
@@ -105,10 +117,15 @@ async def extract_identity(id_type: str, front: Attachment, back: Optional[Attac
         f"The customer says this is their {doc}. {images}\n"
         "Extract the printed fields. For a passport also copy both machine-readable zone (MRZ) lines "
         "exactly, character for character, using '<' for filler. Dates must be YYYY-MM-DD. "
+        "Give the position of the main portrait photo on image 1 as photo_box.\n"
         "Then examine the document like a fraud analyst: is it a real identity document (not a "
         "screenshot, printout of a template, sample/specimen, or a photo of a screen)? List concrete "
         "tamper signs (mismatched fonts, misaligned text, a pasted or replaced photo, edited numbers, "
-        "missing security features) and quality problems (blur, glare, cropping)."
+        "missing security features) and quality problems (blur, glare, cropping).\n"
+        "Set tamper_severity: 'major' only for signs that the name, number, dates or photo were changed "
+        "or that the document is fake; 'minor' for wear, laminate glare, printing or spacing quirks, "
+        "different backgrounds for front and back, or anything you cannot confirm from a photo; "
+        "'none' when there is nothing to note."
     )
     attachments = [front] + ([back] if back else [])
     return await ask_json(prompt, ID_SCHEMA, "identity_document", attachments, system_prompt=SYSTEM_PROMPT)
@@ -121,7 +138,13 @@ async def extract_bill(bill: Attachment) -> Dict:
         "address if different, the bill/statement date as YYYY-MM-DD and the account number. "
         "Copy addresses exactly as printed on one line. Then judge whether it is a real utility, "
         "telecom or internet bill and list any signs of editing (inconsistent fonts or alignment, "
-        "overwritten names, addresses or dates)."
+        "overwritten names, addresses or dates).\n"
+        "In Sri Lanka, water (NWSDB) and electricity (CEB/LECO) bills are often printed or filled in "
+        "by hand on site by the meter reader, so handwriting, carbon copies, reading dates after the "
+        "printed date and totals that differ because of payments or arrears are normal.\n"
+        "Set tamper_severity: 'major' only when the name, address or bill date looks altered or the "
+        "bill looks fabricated; 'minor' for the normal quirks above or anything you cannot confirm; "
+        "'none' when there is nothing to note."
     )
     return await ask_json(prompt, BILL_SCHEMA, "utility_bill", [bill], system_prompt=SYSTEM_PROMPT)
 

@@ -26,6 +26,18 @@ def _parse_date(value: Any) -> Optional[date]:
         return None
 
 
+def _authenticity_check(checks: List[Dict], cid: str, category: str, label: str, doc: Dict) -> None:
+    """Major tamper signs (or a 'suspicious' verdict) need review; minor notes still pass."""
+    signs = doc.get("tamper_signs") or []
+    severity = doc.get("tamper_severity") or ("minor" if signs else "none")
+    if doc.get("authenticity_assessment") == "suspicious" or severity == "major":
+        _check(checks, cid, category, label, WARN, "; ".join(signs) or "Model flagged the document as suspicious")
+    elif signs:
+        _check(checks, cid, category, label, PASS, "Minor notes only: " + "; ".join(signs))
+    else:
+        _check(checks, cid, category, label, PASS, "No tamper signs found")
+
+
 def _id_checks(checks: List[Dict], id_type: str, idd: Dict, quality: Dict, today: date) -> None:
     cat = "document"
     if not idd.get("is_identity_document"):
@@ -85,14 +97,7 @@ def _id_checks(checks: List[Dict], id_type: str, idd: Dict, quality: Dict, today
     elif not expected_nic:
         _check(checks, "id_expiry", cat, "Document not expired", WARN, "Expiry date not readable")
 
-    tamper = idd.get("tamper_signs") or []
-    assessment = idd.get("authenticity_assessment")
-    if assessment == "suspicious" or tamper:
-        _check(checks, "id_authenticity", cat, "No signs of tampering on ID", WARN,
-               "; ".join(tamper) or "Model flagged the document as suspicious")
-    else:
-        _check(checks, "id_authenticity", cat, "No signs of tampering on ID", PASS,
-               "No tamper signs found" + (" (model could not tell)" if assessment == "cannot_tell" else ""))
+    _authenticity_check(checks, "id_authenticity", cat, "No signs of tampering on ID", idd)
 
     issues = [i for q in quality.values() if isinstance(q, dict) for i in q.get("issues", [])]
     issues += idd.get("quality_issues") or []
@@ -123,12 +128,7 @@ def _bill_checks(checks: List[Dict], bill: Dict, idd: Dict, today: date) -> None
         _check(checks, "bill_recent", cat, f"Bill issued in the last {max_age} days", status,
                f"Dated {bill_date} ({age} days ago)")
 
-    tamper = bill.get("tamper_signs") or []
-    if bill.get("authenticity_assessment") == "suspicious" or tamper:
-        _check(checks, "bill_authenticity", cat, "No signs of tampering on bill", WARN,
-               "; ".join(tamper) or "Model flagged the bill as suspicious")
-    else:
-        _check(checks, "bill_authenticity", cat, "No signs of tampering on bill", PASS, "No tamper signs found")
+    _authenticity_check(checks, "bill_authenticity", cat, "No signs of tampering on bill", bill)
 
     holder, id_name = bill.get("account_holder_name", ""), idd.get("full_name", "")
     if holder and id_name:
@@ -245,10 +245,71 @@ def build_checks(
     return checks
 
 
+# --- score + decision ------------------------------------------------------------------
+# How much each check counts toward the verification score.
+WEIGHTS: Dict[str, int] = {
+    "face_match": 20,
+    "liveness_pose": 10,
+    "liveness_same_person": 10,
+    "liveness_static": 10,
+    "liveness_ai": 5,
+    "id_valid": 10,
+    "id_number": 8,
+    "mrz": 8,
+    "nic_consistency": 6,
+    "id_expiry": 6,
+    "id_authenticity": 6,
+    "mrz_name": 4,
+    "id_type": 3,
+    "upload_quality": 3,
+    "address_match": 10,
+    "bill_valid": 8,
+    "bill_recent": 6,
+    "bill_authenticity": 5,
+    "bill_name": 4,
+    "address_id": 3,
+    "duplicate": 5,
+}
+_POINTS = {PASS: 1.0, WARN: 0.5, FAIL: 0.0}
+# A fail here always needs a person, whatever the score.
+HARD_FAILS = {"id_valid", "id_number", "id_expiry", "bill_valid", "bill_recent", "liveness_static"}
+
+
+def score(checks: List[Dict]) -> int:
+    """0-100: weighted share of checks passed (review counts half)."""
+    total = sum(WEIGHTS.get(c["id"], 5) for c in checks)
+    if not total:
+        return 0
+    got = sum(WEIGHTS.get(c["id"], 5) * _POINTS.get(c["status"], 0) for c in checks)
+    return int(round(100 * got / total))
+
+
+def evaluate(checks: List[Dict]) -> Dict:
+    """Score the checks and decide: approved (passed) or manual_review.
+
+    Manual review when the score is below KYC_PASS_SCORE, when a required check
+    (KYC_REQUIRED_CHECKS) did not pass, or when a hard check failed.
+    """
+    settings = get_settings()
+    by_id = {c["id"]: c for c in checks}
+    blockers: List[str] = []
+    for cid in settings.kyc_required_checks:
+        check = by_id.get(cid)
+        if check is None or check["status"] != PASS:
+            blockers.append(check["label"] if check else f"{cid} (not run)")
+    for c in checks:
+        if c["status"] == FAIL and c["id"] in HARD_FAILS and c["label"] not in blockers:
+            blockers.append(c["label"])
+    pct = score(checks)
+    below = pct < settings.kyc_pass_score
+    return {
+        "decision": "manual_review" if blockers or below else "approved",
+        "score": pct,
+        "pass_score": settings.kyc_pass_score,
+        "blockers": blockers,
+        "below_pass_score": below,
+    }
+
+
 def decide(checks: List[Dict]) -> str:
-    statuses = {c["status"] for c in checks}
-    if FAIL in statuses:
-        return "rejected"
-    if WARN in statuses:
-        return "manual_review"
-    return "approved"
+    return evaluate(checks)["decision"]

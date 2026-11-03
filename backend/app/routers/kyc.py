@@ -7,6 +7,7 @@ import json
 import logging
 import random
 import secrets
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile, status
@@ -21,6 +22,7 @@ from ..redis_client import get_redis
 from ..schemas import ChallengeOut, LivenessOut, SubmissionOut
 from ..security import get_current_user
 from ..services import face as face_service
+from ..services import decision as decision_service
 from ..services import image_quality, pipeline
 from ..services.llm_service import Attachment
 
@@ -95,15 +97,22 @@ async def _to_out(sub: Submission) -> SubmissionOut:
             "issues": fr.get("issues"),
             "ai_review": fr.get("ai_review"),
         }
+    report = decision_service.evaluate(sub.checks) if sub.status == "completed" and sub.checks else {}
     return SubmissionOut(
-        id=sub.id, status=sub.status, decision=sub.decision,
+        id=sub.id, status=sub.status, decision=report.get("decision", sub.decision),
+        score=report.get("score"), pass_score=report.get("pass_score"), blockers=report.get("blockers", []),
         progress=await pipeline.get_progress(sub.id) if sub.status not in ("completed", "draft") else None,
         id_type=sub.id_type, address_input=sub.address_input,
         uploaded=sorted((sub.files or {}).keys()),
         quality=sub.quality or {}, extracted=extracted, face=face_out,
         checks=sub.checks or [], error=sub.error,
-        created_at=sub.created_at, updated_at=sub.updated_at,
+        created_at=_utc(sub.created_at), updated_at=_utc(sub.updated_at),
     )
+
+
+def _utc(value: datetime) -> datetime:
+    # SQLite returns naive datetimes; they are stored in UTC.
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
 @router.post("/submissions", response_model=SubmissionOut)
@@ -163,6 +172,13 @@ async def upload_documents(
     back = back_mime = None
     if id_back is not None and id_back.filename:
         back, back_mime = await _read_upload(id_back, "ID back", allow_pdf=False)
+
+    # Upright, metadata-free JPEGs so the LLM and the face models see the same image.
+    front, front_mime = await asyncio.to_thread(image_quality.normalize_image, front), "image/jpeg"
+    if back is not None:
+        back, back_mime = await asyncio.to_thread(image_quality.normalize_image, back), "image/jpeg"
+    if bill_mime != "application/pdf":
+        bill, bill_mime = await asyncio.to_thread(image_quality.normalize_image, bill), "image/jpeg"
 
     files: Dict = {}
     quality: Dict = {}

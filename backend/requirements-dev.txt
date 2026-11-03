@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+fakeredis>=2.23.0
+scikit-image>=0.22.0   # public-domain test portrait for the face-model tests

@@ -33,14 +33,15 @@ class FakeAdapter(LLMAdapter):
                 "full_name": "Ashan Bandara Perera", "id_number": "199534001234",
                 "date_of_birth": "1995-12-05", "gender": "M", "address": "12/3 Galle Road, Colombo 3",
                 "expiry_date": "", "nationality": "Sri Lankan", "mrz_line1": "", "mrz_line2": "",
-                "has_photo": True, "text_legible": True, "tamper_signs": [], "quality_issues": [],
+                "has_photo": True, "photo_box": [], "text_legible": True, "tamper_signs": [],
+                "tamper_severity": "none", "quality_issues": [],
                 "authenticity_assessment": "looks_genuine", "notes": "",
             },
             "utility_bill": {
                 "is_utility_bill": True, "bill_type": "electricity", "issuer": "CEB",
                 "account_holder_name": "A B Perera", "service_address": "No. 12/3, Galle Rd, Colombo 03",
                 "billing_address": "", "bill_date": (TODAY - timedelta(days=20)).isoformat(),
-                "account_number": "1234567890", "tamper_signs": [],
+                "account_number": "1234567890", "tamper_signs": [], "tamper_severity": "none",
                 "authenticity_assessment": "looks_genuine", "notes": "",
             },
             "liveness_review": {
@@ -147,6 +148,7 @@ async def test_full_kyc_flow_approved(client, face_passes):
     assert by_id["bill_name"]["status"] == "pass"
     assert by_id["face_match"]["status"] == "pass"
     assert final["decision"] == "approved", [c for c in final["checks"] if c["status"] != "pass"]
+    assert final["score"] == 100 and final["blockers"] == []
     names = [c[0] for c in FakeAdapter.calls]
     assert sorted(names) == ["address_comparison", "identity_document", "liveness_review", "utility_bill"]
 
@@ -165,7 +167,11 @@ async def test_old_bill_and_wrong_address_are_flagged(client, face_passes, fake_
     by_id = {c["id"]: c for c in final["checks"]}
     assert by_id["bill_recent"]["status"] == "fail"
     assert by_id["address_match"]["status"] == "fail"
-    assert final["decision"] == "rejected"
+    # The score alone would pass, but a required check and a hard check failed.
+    assert final["score"] >= final["pass_score"]
+    assert final["decision"] == "manual_review"
+    assert "Typed address matches the bill" in final["blockers"]
+    assert any(b.startswith("Bill issued") for b in final["blockers"])
 
 
 async def test_failed_liveness_allows_retry(client, monkeypatch):
@@ -185,7 +191,22 @@ async def test_failed_liveness_allows_retry(client, monkeypatch):
     third = (await _do_liveness(client, sid)).json()
     assert third["accepted"] is True and third["attempts_left"] == 0  # out of retries -> decided
     final = (await client.get(f"/kyc/submissions/{sid}")).json()
-    assert final["decision"] == "rejected"
+    assert final["decision"] == "manual_review"
+    assert "Head turned as instructed" in final["blockers"]
+
+
+async def test_minor_tamper_notes_still_pass(client, face_passes, fake_llm):
+    fake_llm.overrides = {"utility_bill": {"tamper_signs": ["Reading date handwritten by meter reader"],
+                                           "tamper_severity": "minor"}}
+    await _register(client, "minor@example.com")
+    sid = (await client.post("/kyc/submissions")).json()["id"]
+    await _upload_docs(client, sid)
+    await _do_liveness(client, sid)
+    final = (await client.get(f"/kyc/submissions/{sid}")).json()
+    by_id = {c["id"]: c for c in final["checks"]}
+    assert by_id["bill_authenticity"]["status"] == "pass"
+    assert "Minor notes only" in by_id["bill_authenticity"]["detail"]
+    assert final["decision"] == "approved"
 
 
 async def test_challenge_cannot_be_reused_and_uploads_are_validated(client, face_passes):

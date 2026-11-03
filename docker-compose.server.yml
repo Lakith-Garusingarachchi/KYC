@@ -1,0 +1,49 @@
+# Server deployment (app only, no tunnel yet):
+#   docker compose -f docker-compose.server.yml up -d --build
+#
+# Host ports come from KYC/.env (defaults below):
+#   KYC_FRONTEND_PORT  public web app  -> open it in ufw
+#   KYC_BACKEND_PORT   API, bound to 127.0.0.1 only (the frontend proxies /api/* to it inside Docker)
+name: kyc
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: sqlite+aiosqlite:////app/data/kyc.db
+      UPLOAD_DIR: /app/data/uploads
+    volumes:
+      - backend-data:/app/data
+      - ./backend/secrets:/app/secrets:ro
+    ports:
+      - "127.0.0.1:${KYC_BACKEND_PORT:-8100}:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "${KYC_FRONTEND_PORT:-3100}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  backend-data:

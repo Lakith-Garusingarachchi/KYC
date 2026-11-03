@@ -19,7 +19,9 @@ from ..config import get_settings
 from ..database import SessionLocal
 from ..models import Submission
 from ..redis_client import get_redis
+from .. import storage
 from . import decision, document_ai, storage_helpers
+from . import face as face_service
 from .llm_service import Attachment
 
 logger = logging.getLogger(__name__)
@@ -114,6 +116,25 @@ async def process_liveness_review(submission_id: str, frames: List[Attachment], 
     await maybe_finalize(submission_id)
 
 
+async def _retry_face_match(files: Dict, identity: Dict, current: Dict) -> Optional[Dict]:
+    """Match again on the ID portrait the LLM located; keep it only if it scores higher."""
+    box = identity.get("photo_box")
+    if not box or "id_front" not in files or "frame_center" not in files:
+        return None
+    try:
+        id_image = storage.load_file(files["id_front"]["path"])
+        frame = storage.load_file(files["frame_center"]["path"])
+        retry = await asyncio.to_thread(face_service.match_with_photo_box, id_image, box, frame)
+    except Exception:
+        logger.warning("face match retry failed", exc_info=True)
+        return None
+    if retry is None:
+        return None
+    if current.get("score") is None or retry["score"] > current["score"]:
+        return retry
+    return None
+
+
 async def maybe_finalize(submission_id: str) -> None:
     """Run the decision once both the document reading and the face review are done.
 
@@ -163,6 +184,12 @@ async def _finalize_once(submission_id: str) -> bool:
                 except Exception as err:
                     logger.warning("address comparison failed for %s: %s", submission_id, err)
 
+            face_result = dict(sub.face_result or {})
+            better = await _retry_face_match(sub.files or {}, idd, face_result.get("face_match") or {})
+            if better is not None:
+                face_result["face_match"] = better
+                sub.face_result = face_result
+
             duplicate = False
             if sub.id_front_sha256:
                 other = await db.execute(
@@ -177,13 +204,13 @@ async def _finalize_once(submission_id: str) -> bool:
                 id_type=sub.id_type or "nic",
                 typed_address=sub.address_input or "",
                 document_result=docs,
-                face_result=sub.face_result or {},
+                face_result=face_result,
                 quality=sub.quality or {},
                 address_llm=address_llm,
                 duplicate_of_other_user=duplicate,
             )
             sub.checks = checks
-            sub.decision = decision.decide(checks)
+            sub.decision = decision.evaluate(checks)["decision"]
             sub.status = "completed"
             await db.commit()
         await set_progress(submission_id, "Done")

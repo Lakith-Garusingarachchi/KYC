@@ -1,0 +1,8 @@
+node_modules/
+.next/
+out/
+.env.local
+public/mediapipe/wasm/
+public/mediapipe/face_landmarker.task
+*.tsbuildinfo
+next-env.d.ts

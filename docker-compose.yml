@@ -1,7 +1,10 @@
-# Runs the whole KYC MVP:  docker compose up --build
+# Runs the whole KYC MVP:  docker compose up -d --build
 #   frontend  http://localhost:3000   (Next.js; proxies /api/* to the backend)
 #   backend   http://localhost:8000   (FastAPI; API docs at /docs)
 #   redis     internal only
+# Ports are bound to 127.0.0.1 only. On a server, publish the app with the
+# Cloudflare Tunnel service below instead of opening ports:
+#   CLOUDFLARE_TUNNEL_TOKEN in KYC/.env, then: docker compose --profile tunnel up -d --build
 name: kyc
 
 services:
@@ -26,7 +29,7 @@ services:
       - backend-data:/app/data
       - ./backend/secrets:/app/secrets:ro
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       redis:
         condition: service_healthy
@@ -37,11 +40,23 @@ services:
     environment:
       BACKEND_URL: http://backend:8000
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       backend:
         condition: service_healthy
     restart: unless-stopped
+
+  # Cloudflare Tunnel (named tunnel, stable hostname). Only starts with --profile tunnel.
+  # In the Cloudflare dashboard, point the tunnel's public hostname to http://frontend:3000
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.7
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - frontend
+    restart: unless-stopped
+    profiles: ["tunnel"]
 
 volumes:
   backend-data:
